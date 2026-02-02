@@ -104,8 +104,8 @@ export const DURATIONS = [30, 60, 90] as const;
 
 export const COLORS = {
   background: RGBA.fromValues(0, 0, 0, 0),
-  pending: RGBA.fromHex("#e5e7eb"),
-  correct: RGBA.fromHex("#9ca3af"),
+  pending: RGBA.fromHex("#9ca3af"),
+  correct: RGBA.fromHex("#e5e7eb"),
   wrong: RGBA.fromHex("#ef4444"),
 };
 

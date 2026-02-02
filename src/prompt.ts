@@ -121,20 +121,21 @@ export class PromptView {
   }
 }
 
-export function buildPromptLayout(
+export function buildParagraphLayout(
   width: number,
   height: number,
-  words: string[],
-  startIndex = 0,
+  text: string,
 ): PromptLayout {
   const chars: string[] = [];
   const positions: CharPos[] = [];
   let line = 0;
   let col = 0;
-  let wordIndex = startIndex;
 
-  while (line < height) {
-    const word = words[wordIndex % words.length] ?? "";
+  const words = text.split(/\s+/).filter((w) => w.length > 0);
+  let wordIndex = 0;
+
+  while (line < height && wordIndex < words.length) {
+    const word = words[wordIndex] ?? "";
     const needsSpace = col > 0;
     const extra = needsSpace ? 1 : 0;
 
@@ -142,8 +143,12 @@ export function buildPromptLayout(
       if (line + 1 >= height) {
         break;
       }
+
       if (col > 0) {
-        positions.push({ x: Math.min(width - 1, Math.max(0, col - 1)), y: line });
+        positions.push({
+          x: Math.min(width - 1, Math.max(0, col - 1)),
+          y: line,
+        });
         chars.push("\n");
       }
       line += 1;

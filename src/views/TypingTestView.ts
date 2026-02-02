@@ -5,10 +5,11 @@ import {
   type KeyEvent,
 } from "@opentui/core";
 
-import { COLORS, DURATIONS, UI_COLORS, WORDS } from "../constants";
+import { COLORS, DURATIONS, UI_COLORS } from "../constants";
 import { applyLayout } from "../layout";
 import { computeStats, computeTimeLeft, type Mode } from "../metrics";
-import { buildPromptLayout, PromptView } from "../prompt";
+import { buildParagraphLayout, PromptView } from "../prompt";
+import { ParagraphManager } from "../paragraphs";
 import type { TestResults, View } from "./types";
 
 export type TypingTestViewOptions = {
@@ -30,6 +31,8 @@ export class TypingTestView implements View {
   private promptRenderable: FrameBufferRenderable;
   private promptView: PromptView;
 
+  private paragraphManager: ParagraphManager;
+
   private mode: Mode = "idle";
   private durationIndex = 1;
   private startTime: number | null = null;
@@ -38,7 +41,9 @@ export class TypingTestView implements View {
   private correctCount = 0;
   private typedCount = 0;
   private errorCount = 0;
-  private wordSeed = Math.floor(Math.random() * WORDS.length);
+  private sessionCorrectCount = 0;
+  private sessionTypedCount = 0;
+  private sessionErrorCount = 0;
   private lastPromptWidth = 0;
   private lastPromptHeight = 0;
 
@@ -94,6 +99,7 @@ export class TypingTestView implements View {
     });
 
     this.promptView = new PromptView(this.promptRenderable, COLORS);
+    this.paragraphManager = new ParagraphManager({ queueSize: 3 });
   }
 
   mount() {
@@ -147,6 +153,11 @@ export class TypingTestView implements View {
       this.promptView.clearAll(width, height);
       this.lastPromptWidth = width;
       this.lastPromptHeight = height;
+
+      const targetChars = Math.floor(width * height * 0.9);
+      this.paragraphManager.setTargetCharCount(targetChars);
+
+      this.paragraphManager.reset();
     }
 
     const promptLeft =
@@ -215,13 +226,16 @@ export class TypingTestView implements View {
   }
 
   private regeneratePrompt(resetCounts: boolean) {
-    const layout = buildPromptLayout(
+    const unit = this.paragraphManager.getCurrentUnit();
+    if (!unit) {
+      return;
+    }
+
+    const layout = buildParagraphLayout(
       this.lastPromptWidth,
       this.lastPromptHeight,
-      WORDS,
-      this.wordSeed,
+      unit.text,
     );
-    this.wordSeed = (this.wordSeed + layout.chars.length) % WORDS.length;
     this.promptView.setLayout(layout);
     this.promptView.drawAll();
     this.cursor = 0;
@@ -231,6 +245,44 @@ export class TypingTestView implements View {
       this.correctCount = 0;
       this.typedCount = 0;
       this.errorCount = 0;
+      this.sessionCorrectCount = 0;
+      this.sessionTypedCount = 0;
+      this.sessionErrorCount = 0;
+    } else {
+      this.sessionCorrectCount += this.correctCount;
+      this.sessionTypedCount += this.typedCount;
+      this.sessionErrorCount += this.errorCount;
+
+      this.correctCount = 0;
+      this.typedCount = 0;
+      this.errorCount = 0;
+    }
+
+    this.updateHud(performance.now());
+  }
+
+  private moveToNextUnit() {
+    this.sessionCorrectCount += this.correctCount;
+    this.sessionTypedCount += this.typedCount;
+    this.sessionErrorCount += this.errorCount;
+
+    this.paragraphManager.completeCurrentUnit();
+
+    this.correctCount = 0;
+    this.typedCount = 0;
+    this.errorCount = 0;
+    this.cursor = 0;
+    this.hideEnterHint();
+
+    const unit = this.paragraphManager.getCurrentUnit();
+    if (unit) {
+      const layout = buildParagraphLayout(
+        this.lastPromptWidth,
+        this.lastPromptHeight,
+        unit.text,
+      );
+      this.promptView.setLayout(layout);
+      this.promptView.drawAll();
     }
 
     this.updateHud(performance.now());
@@ -247,6 +299,7 @@ export class TypingTestView implements View {
     this.startTime = null;
     this.endTime = null;
     this.hideEnterHint();
+    this.paragraphManager.reset();
     if (this.lastPromptWidth > 0 && this.lastPromptHeight > 0) {
       this.regeneratePrompt(true);
     }
@@ -267,17 +320,29 @@ export class TypingTestView implements View {
       this.durationIndex,
       now,
     );
+
+    const totalCorrect = this.sessionCorrectCount + this.correctCount;
+    const totalTyped = this.sessionTypedCount + this.typedCount;
+    const totalErrors = this.sessionErrorCount + this.errorCount;
+
     const stats = computeStats(
       this.mode,
       this.startTime,
       this.endTime,
       this.durationIndex,
-      this.correctCount,
-      this.errorCount,
+      totalCorrect,
+      totalErrors,
       now,
     );
 
     const durationSec = DURATIONS[this.durationIndex] ?? DURATIONS[0];
+    const queueSize = this.paragraphManager.getQueueSize();
+    const totalParagraphs = this.paragraphManager.getTotalCount();
+    const usedParagraphs = this.paragraphManager.getUsedCount();
+    const currentUnit = this.paragraphManager.getCurrentUnit();
+    const unitInfo = currentUnit
+      ? `(${currentUnit.ids.length} paras merged)`
+      : "";
 
     if (this.mode === "idle") {
       this.header.content = `nType  ${this.formatDurationOptions()}   (press 1/2/3)  |  idle`;
@@ -285,7 +350,8 @@ export class TypingTestView implements View {
       this.footer.content =
         `Time: ${timeLeft.toFixed(1)}s  ` +
         `WPM: ${stats.wpm}  Acc: ${stats.accuracy}%  ` +
-        `Errors: ${this.errorCount}  ` +
+        `Errors: ${totalErrors}  ` +
+        `Queue: ${queueSize} ${unitInfo} ` +
         `Esc: reset`;
     } else {
       this.header.content = "nType";
@@ -294,7 +360,9 @@ export class TypingTestView implements View {
       this.timerText.visible = true;
       this.footer.content =
         `WPM: ${stats.wpm}  Acc: ${stats.accuracy}%  ` +
-        `Errors: ${this.errorCount}  ` +
+        `Errors: ${totalErrors}  ` +
+        `Queue: ${queueSize} ${unitInfo} ` +
+        `Progress: ${usedParagraphs}/${totalParagraphs}  ` +
         `Esc: reset`;
     }
 
@@ -312,19 +380,23 @@ export class TypingTestView implements View {
     if (nowMs - this.startTime >= durationMs) {
       this.mode = "finished";
       this.endTime = nowMs;
+
+      const totalCorrect = this.sessionCorrectCount + this.correctCount;
+      const totalErrors = this.sessionErrorCount + this.errorCount;
+
       const stats = computeStats(
         this.mode,
         this.startTime,
         this.endTime,
         this.durationIndex,
-        this.correctCount,
-        this.errorCount,
+        totalCorrect,
+        totalErrors,
         nowMs,
       );
       this.onFinished({
         wpm: stats.wpm,
         accuracy: stats.accuracy,
-        errors: this.errorCount,
+        errors: totalErrors,
         durationSec,
       });
       return true;
@@ -358,7 +430,8 @@ export class TypingTestView implements View {
     }
 
     if (this.cursor >= this.promptView.chars.length) {
-      this.regeneratePrompt(false);
+      this.moveToNextUnit();
+      return;
     }
 
     const expected = this.promptView.chars[this.cursor];
@@ -376,6 +449,10 @@ export class TypingTestView implements View {
     }
 
     this.cursor += 1;
+
+    if (this.cursor >= this.promptView.chars.length) {
+      this.moveToNextUnit();
+    }
   }
 
   private handleLineBreak() {
@@ -403,6 +480,10 @@ export class TypingTestView implements View {
     this.typedCount += 1;
     this.correctCount += 1;
     this.cursor += 1;
+
+    if (this.cursor >= this.promptView.chars.length) {
+      this.moveToNextUnit();
+    }
   }
 
   private keyToChar(key: KeyEvent): string | null {
