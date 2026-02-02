@@ -112,4 +112,7 @@ export const COLORS = {
 export const UI_COLORS = {
   header: "#93c5fd",
   footer: "#a3a3a3",
+  timerIdle: "#facc15",
+  timerRunning: "#4ade80",
+  hint: "#ef4444",
 };

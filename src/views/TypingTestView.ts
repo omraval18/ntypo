@@ -24,6 +24,8 @@ export class TypingTestView implements View {
   private visible = false;
 
   private header: TextRenderable;
+  private hintText: TextRenderable;
+  private timerText: TextRenderable;
   private footer: TextRenderable;
   private promptRenderable: FrameBufferRenderable;
   private promptView: PromptView;
@@ -51,6 +53,24 @@ export class TypingTestView implements View {
       left: 2,
       top: 1,
       fg: UI_COLORS.header,
+    });
+
+    this.hintText = new TextRenderable(this.renderer, {
+      id: "hint",
+      content: "",
+      position: "absolute",
+      left: 2,
+      top: 0,
+      fg: UI_COLORS.hint,
+    });
+
+    this.timerText = new TextRenderable(this.renderer, {
+      id: "timer",
+      content: "",
+      position: "absolute",
+      left: 10,
+      top: 1,
+      fg: UI_COLORS.timerIdle,
     });
 
     this.promptRenderable = new FrameBufferRenderable(this.renderer, {
@@ -82,6 +102,8 @@ export class TypingTestView implements View {
     }
     this.mounted = true;
     this.renderer.root.add(this.header);
+    this.renderer.root.add(this.hintText);
+    this.renderer.root.add(this.timerText);
     this.renderer.root.add(this.promptRenderable);
     this.renderer.root.add(this.footer);
   }
@@ -89,6 +111,8 @@ export class TypingTestView implements View {
   show() {
     this.visible = true;
     this.header.visible = true;
+    this.hintText.visible = false;
+    this.timerText.visible = true;
     this.promptRenderable.visible = true;
     this.footer.visible = true;
     this.resetTest();
@@ -97,6 +121,8 @@ export class TypingTestView implements View {
   hide() {
     this.visible = false;
     this.header.visible = false;
+    this.hintText.visible = false;
+    this.timerText.visible = false;
     this.promptRenderable.visible = false;
     this.footer.visible = false;
   }
@@ -122,6 +148,17 @@ export class TypingTestView implements View {
       this.lastPromptWidth = width;
       this.lastPromptHeight = height;
     }
+
+    const promptLeft =
+      typeof this.promptRenderable.left === "number"
+        ? this.promptRenderable.left
+        : 0;
+    const promptTop =
+      typeof this.promptRenderable.top === "number"
+        ? this.promptRenderable.top
+        : 0;
+    this.hintText.left = promptLeft;
+    this.hintText.top = Math.max(0, promptTop - 1);
 
     this.regeneratePrompt(true);
   }
@@ -150,7 +187,10 @@ export class TypingTestView implements View {
     const expected = this.promptView.chars[this.cursor];
     if (expected === "\n") {
       if (key.name === "return" || key.name === "enter") {
+        this.hideEnterHint();
         this.handleLineBreak();
+      } else {
+        this.showEnterHint();
       }
       return true;
     }
@@ -185,6 +225,7 @@ export class TypingTestView implements View {
     this.promptView.setLayout(layout);
     this.promptView.drawAll();
     this.cursor = 0;
+    this.hideEnterHint();
 
     if (resetCounts) {
       this.correctCount = 0;
@@ -205,6 +246,7 @@ export class TypingTestView implements View {
     this.mode = "idle";
     this.startTime = null;
     this.endTime = null;
+    this.hideEnterHint();
     if (this.lastPromptWidth > 0 && this.lastPromptHeight > 0) {
       this.regeneratePrompt(true);
     }
@@ -235,21 +277,29 @@ export class TypingTestView implements View {
       now,
     );
 
-    const modeLabel =
-      this.mode === "idle"
-        ? "idle"
-        : this.mode === "running"
-          ? "running"
-          : "finished";
+    const durationSec = DURATIONS[this.durationIndex] ?? DURATIONS[0];
 
-    this.header.content = `nType  ${this.formatDurationOptions()}   (press 1/2/3)  |  ${modeLabel}`;
-    this.footer.content =
-      `Time: ${timeLeft.toFixed(1)}s  ` +
-      `WPM: ${stats.wpm}  Acc: ${stats.accuracy}%  ` +
-      `Errors: ${this.errorCount}  ` +
-      `Esc: reset`;
+    if (this.mode === "idle") {
+      this.header.content = `nType  ${this.formatDurationOptions()}   (press 1/2/3)  |  idle`;
+      this.timerText.visible = false;
+      this.footer.content =
+        `Time: ${timeLeft.toFixed(1)}s  ` +
+        `WPM: ${stats.wpm}  Acc: ${stats.accuracy}%  ` +
+        `Errors: ${this.errorCount}  ` +
+        `Esc: reset`;
+    } else {
+      this.header.content = "nType";
+      this.timerText.content = `${timeLeft.toFixed(1)}s`;
+      this.timerText.fg = UI_COLORS.timerRunning;
+      this.timerText.visible = true;
+      this.footer.content =
+        `WPM: ${stats.wpm}  Acc: ${stats.accuracy}%  ` +
+        `Errors: ${this.errorCount}  ` +
+        `Esc: reset`;
+    }
 
     this.header.requestRender();
+    this.timerText.requestRender();
     this.footer.requestRender();
   }
 
@@ -286,6 +336,7 @@ export class TypingTestView implements View {
     if (this.cursor <= 0) {
       return;
     }
+    this.hideEnterHint();
     this.cursor -= 1;
     this.promptView.clearState(this.cursor);
   }
@@ -298,6 +349,8 @@ export class TypingTestView implements View {
     if (this.mode === "idle") {
       this.startTest();
     }
+
+    this.hideEnterHint();
 
     const now = performance.now();
     if (this.finishIfNeeded(now)) {
@@ -333,6 +386,8 @@ export class TypingTestView implements View {
     if (this.mode === "idle") {
       this.startTest();
     }
+
+    this.hideEnterHint();
 
     const now = performance.now();
     if (this.finishIfNeeded(now)) {
@@ -383,5 +438,17 @@ export class TypingTestView implements View {
       return true;
     }
     return false;
+  }
+
+  private showEnterHint() {
+    this.hintText.content = "Hint: ↵  ";
+    this.hintText.visible = true;
+    this.hintText.requestRender();
+  }
+
+  private hideEnterHint() {
+    this.hintText.content = "";
+    this.hintText.visible = false;
+    this.hintText.requestRender();
   }
 }
