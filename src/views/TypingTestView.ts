@@ -19,6 +19,7 @@ export type TypingTestViewOptions = {
 
 export class TypingTestView implements View {
   readonly id = "typing" as const;
+  private static readonly MAX_SPACE_EXTRAS = 1;
   private renderer: CliRenderer;
   private onFinished: (results: TestResults) => void;
   private mounted = false;
@@ -41,6 +42,7 @@ export class TypingTestView implements View {
   private correctCount = 0;
   private typedCount = 0;
   private errorCount = 0;
+  private extraErrorCount = 0; // Track extra chars typed as errors
   private sessionCorrectCount = 0;
   private sessionTypedCount = 0;
   private sessionErrorCount = 0;
@@ -121,7 +123,11 @@ export class TypingTestView implements View {
     this.timerText.visible = true;
     this.promptRenderable.visible = true;
     this.footer.visible = true;
-    this.resetTest();
+    
+    // Defer reset to allow layout to complete first
+    setTimeout(() => {
+      this.resetTest();
+    }, 0);
   }
 
   hide() {
@@ -201,6 +207,11 @@ export class TypingTestView implements View {
         this.hideEnterHint();
         this.handleLineBreak();
       } else {
+        // User typed wrong char at line break - add as extra char
+        const char = this.keyToChar(key);
+        if (char !== null) {
+          this.handleExtraChar(char);
+        }
         this.showEnterHint();
       }
       return true;
@@ -245,17 +256,19 @@ export class TypingTestView implements View {
       this.correctCount = 0;
       this.typedCount = 0;
       this.errorCount = 0;
+      this.extraErrorCount = 0;
       this.sessionCorrectCount = 0;
       this.sessionTypedCount = 0;
       this.sessionErrorCount = 0;
     } else {
       this.sessionCorrectCount += this.correctCount;
       this.sessionTypedCount += this.typedCount;
-      this.sessionErrorCount += this.errorCount;
+      this.sessionErrorCount += this.errorCount + this.extraErrorCount;
 
       this.correctCount = 0;
       this.typedCount = 0;
       this.errorCount = 0;
+      this.extraErrorCount = 0;
     }
 
     this.updateHud(performance.now());
@@ -264,13 +277,14 @@ export class TypingTestView implements View {
   private moveToNextUnit() {
     this.sessionCorrectCount += this.correctCount;
     this.sessionTypedCount += this.typedCount;
-    this.sessionErrorCount += this.errorCount;
+    this.sessionErrorCount += this.errorCount + this.extraErrorCount;
 
     this.paragraphManager.completeCurrentUnit();
 
     this.correctCount = 0;
     this.typedCount = 0;
     this.errorCount = 0;
+    this.extraErrorCount = 0;
     this.cursor = 0;
     this.hideEnterHint();
 
@@ -323,7 +337,7 @@ export class TypingTestView implements View {
 
     const totalCorrect = this.sessionCorrectCount + this.correctCount;
     const totalTyped = this.sessionTypedCount + this.typedCount;
-    const totalErrors = this.sessionErrorCount + this.errorCount;
+    const totalErrors = this.sessionErrorCount + this.errorCount + this.extraErrorCount;
 
     const stats = computeStats(
       this.mode,
@@ -339,10 +353,7 @@ export class TypingTestView implements View {
     const queueSize = this.paragraphManager.getQueueSize();
     const totalParagraphs = this.paragraphManager.getTotalCount();
     const usedParagraphs = this.paragraphManager.getUsedCount();
-    const currentUnit = this.paragraphManager.getCurrentUnit();
-    const unitInfo = currentUnit
-      ? `(${currentUnit.ids.length} paras merged)`
-      : "";
+    const extraChars = this.promptView.getTotalExtraChars();
 
     if (this.mode === "idle") {
       this.header.content = `nType  ${this.formatDurationOptions()}   (press 1/2/3)  |  idle`;
@@ -351,7 +362,6 @@ export class TypingTestView implements View {
         `Time: ${timeLeft.toFixed(1)}s  ` +
         `WPM: ${stats.wpm}  Acc: ${stats.accuracy}%  ` +
         `Errors: ${totalErrors}  ` +
-        `Queue: ${queueSize} ${unitInfo} ` +
         `Esc: reset`;
     } else {
       this.header.content = "nType";
@@ -360,8 +370,8 @@ export class TypingTestView implements View {
       this.timerText.visible = true;
       this.footer.content =
         `WPM: ${stats.wpm}  Acc: ${stats.accuracy}%  ` +
-        `Errors: ${totalErrors}  ` +
-        `Queue: ${queueSize} ${unitInfo} ` +
+        `Errors: ${totalErrors}` +
+        (extraChars > 0 ? ` (+${extraChars} extra)` : "") + `  ` +
         `Progress: ${usedParagraphs}/${totalParagraphs}  ` +
         `Esc: reset`;
     }
@@ -382,7 +392,7 @@ export class TypingTestView implements View {
       this.endTime = nowMs;
 
       const totalCorrect = this.sessionCorrectCount + this.correctCount;
-      const totalErrors = this.sessionErrorCount + this.errorCount;
+      const totalErrors = this.sessionErrorCount + this.errorCount + this.extraErrorCount;
 
       const stats = computeStats(
         this.mode,
@@ -405,12 +415,57 @@ export class TypingTestView implements View {
   }
 
   private handleBackspace() {
+    this.hideEnterHint();
+
+    // First, try to remove extra chars at the position before cursor
+    if (this.cursor > 0) {
+      const prevIndex = this.cursor - 1;
+      if (this.promptView.hasExtraChars(prevIndex)) {
+        this.promptView.removeExtraChar(prevIndex);
+        this.extraErrorCount = Math.max(0, this.extraErrorCount - 1);
+        this.updateHud(performance.now());
+        return;
+      }
+    }
+
+    // Also check for extra chars at current position (for space case)
+    if (this.promptView.hasExtraChars(this.cursor > 0 ? this.cursor - 1 : 0)) {
+      this.promptView.removeExtraChar(this.cursor > 0 ? this.cursor - 1 : 0);
+      this.extraErrorCount = Math.max(0, this.extraErrorCount - 1);
+      this.updateHud(performance.now());
+      return;
+    }
+
+    // Otherwise, move cursor back
     if (this.cursor <= 0) {
       return;
     }
-    this.hideEnterHint();
     this.cursor -= 1;
     this.promptView.clearState(this.cursor);
+    this.updateHud(performance.now());
+  }
+
+  private handleExtraChar(char: string) {
+    if (this.mode === "finished") {
+      return;
+    }
+
+    if (this.mode === "idle") {
+      this.startTest();
+    }
+
+    const now = performance.now();
+    if (this.finishIfNeeded(now)) {
+      return;
+    }
+
+    // Add extra char after the previous position (cursor - 1)
+    // If cursor is 0, we're at the start, so add at position -1 (special case)
+    const insertIndex = this.cursor > 0 ? this.cursor - 1 : 0;
+    this.promptView.addExtraChar(insertIndex, char);
+    this.extraErrorCount += 1;
+    this.typedCount += 1;
+    this.updateHud(now);
   }
 
   private handleCharInput(char: string) {
@@ -440,15 +495,32 @@ export class TypingTestView implements View {
     }
 
     const isCorrect = char === expected;
-    this.promptView.setState(this.cursor, isCorrect ? 1 : 2);
-    this.typedCount += 1;
+    
     if (isCorrect) {
+      // Correct char - mark as correct and move on
+      this.promptView.setState(this.cursor, 1);
+      this.typedCount += 1;
       this.correctCount += 1;
+      this.cursor += 1;
+    } else if (expected === " ") {
+      // Wrong char typed when space expected - show a single red space
+      const insertIndex = this.cursor > 0 ? this.cursor - 1 : 0;
+      if (
+        this.promptView.getExtraCharCount(insertIndex) >=
+        TypingTestView.MAX_SPACE_EXTRAS
+      ) {
+        return;
+      }
+      this.promptView.addExtraChar(insertIndex, " ");
+      this.extraErrorCount += 1;
+      this.typedCount += 1;
     } else {
+      // Wrong char for a regular character - mark the expected char as wrong and move on
+      this.promptView.setState(this.cursor, 2);
+      this.typedCount += 1;
       this.errorCount += 1;
+      this.cursor += 1;
     }
-
-    this.cursor += 1;
 
     if (this.cursor >= this.promptView.chars.length) {
       this.moveToNextUnit();
