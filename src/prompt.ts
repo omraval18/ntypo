@@ -16,10 +16,9 @@ export type PromptColors = {
 
 export type PromptState = 0 | 1 | 2;
 
-// Extra characters typed (wrong chars in spaces, etc.)
 export type ExtraChar = {
   char: string;
-  afterIndex: number; // Index in chars array after which this extra char was typed
+  afterIndex: number;
 };
 
 export class PromptView {
@@ -30,8 +29,7 @@ export class PromptView {
   chars: string[] = [];
   positions: CharPos[] = [];
   states = new Int8Array(0);
-  
-  // Track extra (wrong) characters typed at each position
+
   private extraChars: Map<number, string[]> = new Map();
 
   constructor(renderable: FrameBufferRenderable, colors: PromptColors) {
@@ -72,7 +70,6 @@ export class PromptView {
     this.extraChars.clear();
   }
 
-  // Add an extra (wrong) character at a position
   addExtraChar(afterIndex: number, char: string): number {
     const extras = this.extraChars.get(afterIndex) ?? [];
     extras.push(char);
@@ -81,7 +78,6 @@ export class PromptView {
     return extras.length;
   }
 
-  // Remove the last extra character at a position
   removeExtraChar(afterIndex: number): boolean {
     const extras = this.extraChars.get(afterIndex);
     if (!extras || extras.length === 0) {
@@ -95,17 +91,14 @@ export class PromptView {
     return true;
   }
 
-  // Get count of extra chars at a position
   getExtraCharCount(afterIndex: number): number {
     return this.extraChars.get(afterIndex)?.length ?? 0;
   }
 
-  // Check if there are any extra chars at a position
   hasExtraChars(afterIndex: number): boolean {
     return this.getExtraCharCount(afterIndex) > 0;
   }
 
-  // Get total extra chars count
   getTotalExtraChars(): number {
     let total = 0;
     for (const extras of this.extraChars.values()) {
@@ -118,7 +111,6 @@ export class PromptView {
     const width = Math.max(0, Math.floor(this.renderable.width));
     const height = Math.max(0, Math.floor(this.renderable.height));
 
-    // Clear all previous positions
     for (const pos of this.lastPositions) {
       if (pos.x >= 0 && pos.y >= 0 && pos.x < width && pos.y < height) {
         this.renderable.frameBuffer.setCell(
@@ -164,7 +156,6 @@ export class PromptView {
       });
     }
 
-    // Extras after the last character
     if (this.chars.length > 0) {
       pushExtras(this.chars.length - 1);
     }
@@ -174,7 +165,7 @@ export class PromptView {
     for (let i = 0; i < maxTokens; i += 1) {
       const token = tokens[i];
       const pos = this.drawableSlots[i];
-      if (!pos) {
+      if (!token || !pos) {
         continue;
       }
       if (pos.x < 0 || pos.y < 0 || pos.x >= width || pos.y >= height) {
@@ -193,13 +184,7 @@ export class PromptView {
               : this.colors.pending;
       const bg = isExtraSpace ? this.colors.wrong : this.colors.background;
 
-      this.renderable.frameBuffer.setCell(
-        pos.x,
-        pos.y,
-        token.char,
-        fg,
-        bg,
-      );
+      this.renderable.frameBuffer.setCell(pos.x, pos.y, token.char, fg, bg);
       drawnPositions.push({ x: pos.x, y: pos.y });
     }
 
@@ -218,8 +203,7 @@ export class PromptView {
     }
 
     this.states[index] = state;
-    
-    // Redraw everything to account for positioning
+
     this.redrawWithExtras();
   }
 
@@ -227,7 +211,6 @@ export class PromptView {
     this.setState(index, 0);
   }
 
-  // Clear extra chars at a specific index
   clearExtraCharsAt(index: number) {
     if (this.extraChars.has(index)) {
       this.extraChars.delete(index);

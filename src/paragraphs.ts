@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from "fs";
-import { join, resolve } from "path";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 
 export interface Paragraph {
   text: string;
@@ -128,14 +129,13 @@ export class ParagraphManager {
   private loadParagraphs(filePath?: string): void {
     try {
       const possiblePaths: string[] = [];
+      const moduleDir = dirname(fileURLToPath(import.meta.url));
 
       if (filePath) {
         possiblePaths.push(filePath);
       }
-      possiblePaths.push(join(__dirname, "../public/static/paragraphs.json"));
-      possiblePaths.push(
-        join(__dirname, "../../public/static/paragraphs.json"),
-      );
+      possiblePaths.push(join(moduleDir, "public/static/paragraphs.json"));
+      possiblePaths.push(join(moduleDir, "../public/static/paragraphs.json"));
       possiblePaths.push(
         join(process.cwd(), "src/public/static/paragraphs.json"),
       );
