@@ -1,0 +1,81 @@
+name: Beta Release
+
+on:
+  push:
+    tags:
+      - "v*-beta.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: bun-linux-x64
+            artifact: ntypo-linux-x64
+            ext: ""
+          - os: macos-13
+            target: bun-darwin-x64
+            artifact: ntypo-macos-x64
+            ext: ""
+          - os: macos-14
+            target: bun-darwin-arm64
+            artifact: ntypo-macos-arm64
+            ext: ""
+          - os: windows-latest
+            target: bun-windows-x64
+            artifact: ntypo-windows-x64
+            ext: ".exe"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: "1.3.1"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Prepare dist directory
+        run: mkdir -p dist
+
+      - name: Build native binary
+        run: bun build --compile --target ${{ matrix.target }} --outfile dist/ntypo${{ matrix.ext }} bin/ntypo.ts
+
+      - name: Package (macOS/Linux)
+        if: runner.os != 'Windows'
+        run: |
+          chmod +x dist/ntypo${{ matrix.ext }}
+          tar -czf dist/${{ matrix.artifact }}.tar.gz -C dist ntypo${{ matrix.ext }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\ntypo${{ matrix.ext }} -DestinationPath dist\${{ matrix.artifact }}.zip
+
+      - name: Upload release asset (macOS/Linux)
+        if: runner.os != 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          files: dist/${{ matrix.artifact }}.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload release asset (Windows)
+        if: runner.os == 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          files: dist/${{ matrix.artifact }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
