@@ -2,7 +2,7 @@
   "lockfileVersion": 1,
   "workspaces": {
     "": {
-      "name": "ntype",
+      "name": "ntypo",
       "dependencies": {
         "@opentui/core": "^0.1.75",
       },

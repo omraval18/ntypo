@@ -19,7 +19,15 @@ export interface ParagraphManagerOptions {
   filePath?: string;
   queueSize?: number;
   targetCharCount?: number;
+  usage?: ParagraphUsage;
 }
+
+export type ParagraphUsage = {
+  usedIds: Set<number>;
+  markUsedIds: (ids: number[]) => void;
+  resetUsedIds: () => void;
+  replaceUsedIds?: (ids: number[]) => void;
+};
 
 const FALLBACK_WORDS: string[] = [
   "the",
@@ -109,6 +117,8 @@ export class ParagraphManager {
   private paragraphs: Paragraph[] = [];
   private queue: TypingUnit[] = [];
   private usedIds: Set<number> = new Set();
+  private reservedIds: Set<number> = new Set();
+  private usage?: ParagraphUsage;
   private queueSize: number;
   private targetCharCount: number;
   private currentIndex: number = 0;
@@ -118,8 +128,10 @@ export class ParagraphManager {
   constructor(options: ParagraphManagerOptions = {}) {
     this.queueSize = options.queueSize ?? 3;
     this.targetCharCount = options.targetCharCount ?? 400;
+    this.usage = options.usage;
+    this.usedIds = this.usage?.usedIds ?? new Set();
     this.loadParagraphs(options.filePath);
-    this.initializeQueue();
+    this.initializeQueue(true);
   }
 
   setTargetCharCount(count: number): void {
@@ -156,6 +168,7 @@ export class ParagraphManager {
         this.paragraphs = JSON.parse(data) as Paragraph[];
         this.totalParagraphs = this.paragraphs.length;
         this.isFallback = false;
+        this.pruneUsedIds();
         console.log(
           `Loaded ${this.totalParagraphs} paragraphs from ${usedPath}`,
         );
@@ -166,6 +179,7 @@ export class ParagraphManager {
         this.paragraphs = generateFallbackParagraphs(100);
         this.totalParagraphs = this.paragraphs.length;
         this.isFallback = true;
+        this.pruneUsedIds();
       }
     } catch (error) {
       console.error("Failed to load paragraphs:", error);
@@ -173,12 +187,48 @@ export class ParagraphManager {
       this.paragraphs = generateFallbackParagraphs(100);
       this.totalParagraphs = this.paragraphs.length;
       this.isFallback = true;
+      this.pruneUsedIds();
     }
   }
 
-  private initializeQueue(): void {
+  private pruneUsedIds(): void {
+    if (this.usedIds.size === 0) {
+      return;
+    }
+    const validIds = new Set(this.paragraphs.map((paragraph) => paragraph.id));
+    let changed = false;
+    for (const id of this.usedIds) {
+      if (!validIds.has(id)) {
+        this.usedIds.delete(id);
+        changed = true;
+      }
+    }
+    if (changed && this.usage?.replaceUsedIds) {
+      this.usage.replaceUsedIds(Array.from(this.usedIds));
+    }
+  }
+
+  private initializeQueue(preserveUsedIds: boolean): void {
     this.queue = [];
-    this.usedIds.clear();
+    this.reservedIds.clear();
+    if (!preserveUsedIds) {
+      if (this.usage) {
+        this.usage.resetUsedIds();
+      } else {
+        this.usedIds.clear();
+      }
+    }
+    if (
+      preserveUsedIds &&
+      this.totalParagraphs > 0 &&
+      this.usedIds.size >= this.totalParagraphs
+    ) {
+      if (this.usage) {
+        this.usage.resetUsedIds();
+      } else {
+        this.usedIds.clear();
+      }
+    }
     this.currentIndex = 0;
     this.refillQueue();
   }
@@ -195,24 +245,18 @@ export class ParagraphManager {
       const index = this.currentIndex % this.totalParagraphs;
       paragraph = this.paragraphs[index];
 
-      if (paragraph && !this.usedIds.has(paragraph.id)) {
-        this.usedIds.add(paragraph.id);
+      if (
+        paragraph &&
+        !this.usedIds.has(paragraph.id) &&
+        !this.reservedIds.has(paragraph.id)
+      ) {
+        this.reservedIds.add(paragraph.id);
         this.currentIndex = index + 1;
         return paragraph;
       }
 
       this.currentIndex = index + 1;
       attempts++;
-    }
-
-    this.usedIds.clear();
-    this.currentIndex = 0;
-
-    paragraph = this.paragraphs[0];
-    if (paragraph) {
-      this.usedIds.add(paragraph.id);
-      this.currentIndex = 1;
-      return paragraph;
     }
 
     return null;
@@ -279,7 +323,38 @@ export class ParagraphManager {
       return this.getCurrentUnit();
     }
 
-    this.queue.shift();
+    const completed = this.queue.shift();
+    if (completed) {
+      const committed: number[] = [];
+      for (const id of completed.ids) {
+        this.reservedIds.delete(id);
+        if (!this.usedIds.has(id)) {
+          committed.push(id);
+        }
+      }
+
+      if (committed.length > 0) {
+        if (this.usage) {
+          this.usage.markUsedIds(committed);
+        } else {
+          for (const id of committed) {
+            this.usedIds.add(id);
+          }
+        }
+      }
+    }
+
+    if (
+      this.usedIds.size === this.totalParagraphs &&
+      this.reservedIds.size === 0
+    ) {
+      if (this.usage) {
+        this.usage.resetUsedIds();
+      } else {
+        this.usedIds.clear();
+      }
+      this.currentIndex = 0;
+    }
 
     this.refillQueue();
 
@@ -299,7 +374,7 @@ export class ParagraphManager {
   }
 
   reset(): void {
-    this.initializeQueue();
+    this.initializeQueue(true);
   }
 
   getTotalCount(): number {
@@ -307,7 +382,7 @@ export class ParagraphManager {
   }
 
   getUsedCount(): number {
-    return this.usedIds.size;
+    return this.usedIds.size + this.reservedIds.size;
   }
 
   isUsingFallback(): boolean {

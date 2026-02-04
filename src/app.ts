@@ -1,12 +1,14 @@
 import { createCliRenderer, LayoutEvents } from "@opentui/core";
 
 import { COLORS } from "./constants";
+import { UserConfigStore } from "./storage/userConfig";
 import { ResultsView } from "./views/ResultsView";
 import { TypingTestView } from "./views/TypingTestView";
 import { ViewManager } from "./views/ViewManager";
 
 export async function startApp() {
   let hudTimer: ReturnType<typeof setInterval> | null = null;
+  const userStore = new UserConfigStore();
 
   const renderer = await createCliRenderer({
     targetFps: 60,
@@ -25,11 +27,14 @@ export async function startApp() {
     onRestart: () => {
       viewManager.show("typing");
     },
+    getBestWpm: (durationSec) => userStore.getBestWpm(durationSec),
   });
 
   const typingView = new TypingTestView({
     renderer,
+    paragraphUsage: userStore.getParagraphUsage(),
     onFinished: (results) => {
+      userStore.recordResult(results);
       resultsView.setResults(results);
       viewManager.show("results");
     },

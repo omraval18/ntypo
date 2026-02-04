@@ -5,12 +5,14 @@ import type { TestResults, View } from "./types";
 export type ResultsViewOptions = {
   renderer: CliRenderer;
   onRestart: () => void;
+  getBestWpm?: (durationSec?: number) => number | null;
 };
 
 export class ResultsView implements View {
   readonly id = "results" as const;
   private renderer: CliRenderer;
   private onRestart: () => void;
+  private getBestWpm?: (durationSec?: number) => number | null;
   private mounted = false;
   private visible = false;
   private results: TestResults | null = null;
@@ -22,6 +24,7 @@ export class ResultsView implements View {
   constructor(options: ResultsViewOptions) {
     this.renderer = options.renderer;
     this.onRestart = options.onRestart;
+    this.getBestWpm = options.getBestWpm;
 
     this.title = new TextRenderable(this.renderer, {
       id: "results-title",
@@ -112,7 +115,19 @@ export class ResultsView implements View {
     }
 
     this.title.content = "Results";
-    this.stats.content = `WPM: ${this.results.wpm}   Accuracy: ${this.results.accuracy}%   Errors: ${this.results.errors}`;
+    const bestForDuration = this.getBestWpm
+      ? this.getBestWpm(this.results.durationSec)
+      : null;
+    let bestWpm = bestForDuration;
+    if (typeof bestWpm !== "number" || bestWpm <= 0) {
+      bestWpm = this.getBestWpm ? this.getBestWpm() : null;
+    }
+    const bestText =
+      typeof bestWpm === "number" && bestWpm > 0 ? `   Best: ${bestWpm}` : "";
+    this.stats.content =
+      `WPM: ${this.results.wpm}   Accuracy: ${this.results.accuracy}%   ` +
+      `Errors: ${this.results.errors}` +
+      bestText;
     this.hint.content = "Press Enter to start again  •  Esc: reset";
   }
 
